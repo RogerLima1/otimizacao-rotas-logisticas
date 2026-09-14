@@ -1,0 +1,13 @@
+# Dependências (reinstale com: npm install)
+node_modules/
+
+# Variáveis de ambiente (contém senha do banco de dados)
+.env
+
+# Resultados de experimentos (opcional manter fora do git;
+# remova esta linha se quiser versionar os CSVs também)
+backend/resultados/*.csv
+
+# Arquivos do sistema
+.DS_Store
+Thumbs.db
