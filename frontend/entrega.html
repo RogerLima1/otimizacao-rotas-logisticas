@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+
+<html lang="pt-BR">
+<head>
+
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>Rota de Entrega Completa — Otimização de Rotas Logísticas</title>
+
+    <link rel="stylesheet" href="css/style.css">
+
+    <link
+        rel="stylesheet"
+        href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    >
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap"
+        rel="stylesheet"
+    >
+
+</head>
+
+<body>
+
+<header class="cabecalho">
+    <a href="index.html" class="voltar">← Voltar</a>
+    <h1>Rota de Entrega Completa</h1>
+    <p>Dijkstra, Bellman-Ford e A* combinados com o caixeiro-viajante (heurística do vizinho mais próximo)</p>
+</header>
+
+<main class="container">
+
+    <section class="painel-controle">
+
+        <h2>Rota de Entrega Completa (origem → todos os pontos → origem)</h2>
+
+        <p class="legenda-secao">
+            Sai da origem, visita todos os pontos e retorna. 
+            
+        </p>
+
+        <div class="campos">
+
+            <div class="campo">
+                <label for="cenario">Cenário</label>
+                <select id="cenario">
+                    <option value="">Carregando...</option>
+                </select>
+            </div>
+
+        </div>
+
+        <button id="btnCalcularEntrega">Calcular Rota de Entrega</button>
+
+        <p id="mensagemEntrega"></p>
+
+    </section>
+
+    <section class="mapa-section">
+
+        <h2>Mapa da Rede Logística</h2>
+
+        <div id="mapa"></div>
+
+    </section>
+
+    <section class="grafico-section">
+
+        <h2>Tempo para Montar a Matriz de Distâncias</h2>
+
+        <p class="legenda-secao">
+            Tempo de execução de cada algoritmo para calcular a distância
+            entre todos os pares de pontos do cenário.
+        </p>
+
+        <div class="grafico-container">
+            <canvas id="graficoEntrega"></canvas>
+        </div>
+
+    </section>
+
+    <section class="rota-entrega-section">
+
+        <h2>Comparação dos Algoritmos na Rota de Entrega</h2>
+
+        <div class="tabela-scroll">
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Algoritmo</th>
+                        <th>Distância total (km)</th>
+                        <th>Tempo de viagem (h)</th>
+                        <th>Paradas</th>
+                        <th>Tempo total c/ paradas (h)</th>
+                        <th>Custo total (R$)</th>
+                        <th>Tempo p/ montar matriz (ms)</th>
+                    </tr>
+                </thead>
+
+                <tbody id="tabelaRotaEntrega">
+                    <tr>
+                        <td colspan="7">Nenhuma rota calculada ainda.</td>
+                    </tr>
+                </tbody>
+
+            </table>
+        </div>
+
+        <div id="ordemVisitaEntrega" class="ordem-visita"></div>
+
+    </section>
+
+    <section class="resumo-experimentos-section">
+
+        <h2>Resumo Estatístico dos Experimentos</h2>
+
+        <p class="legenda-secao">
+            Estatísticas de todas as execuções salvas: média, mediana,
+            desvio padrão, mínimo e máximo por cenário e algoritmo.
+        </p>
+
+        <button id="btnAtualizarResumo">Atualizar Resumo</button>
+
+        <p id="mensagemResumo"></p>
+
+        <div class="tabela-scroll">
+            <table>
+
+                <thead>
+                    <tr>
+                        <th>Cenário</th>
+                        <th>Algoritmo</th>
+                        <th>Execuções</th>
+                        <th>Dist. média (km)</th>
+                        <th>Custo médio (R$)</th>
+                        <th>Tempo viagem médio (min)</th>
+                        <th>Execução média (ms)</th>
+                        <th>Mediana (ms)</th>
+                        <th>Desvio padrão (ms)</th>
+                        <th>Mín (ms)</th>
+                        <th>Máx (ms)</th>
+                    </tr>
+                </thead>
+
+                <tbody id="tabelaResumoExperimentos">
+                    <tr>
+                        <td colspan="11">
+                            Nenhum dado carregado ainda. Clique em
+                            "Atualizar Resumo".
+                        </td>
+                    </tr>
+                </tbody>
+
+            </table>
+        </div>
+
+    </section>
+
+</main>
+
+<footer>
+    <p>Sistema desenvolvido para estudo de otimização de rotas logísticas</p>
+</footer>
+
+<script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
+</script>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script src="js/common.js"></script>
+<script src="js/entrega.js"></script>
+
+</body>
+</html>

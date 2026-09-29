@@ -77,9 +77,12 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
 
     const { nodes, edges } = await buscarGrafo(cenario);
 
-    if (nodes.length < 2) {
+        if (nodes.length < 2) {
         console.log(`  Ignorado (menos de 2 nós encontrados).`);
-        return;
+        return {
+            executado: false,
+            mensagem: 'Cenário com menos de 2 nós — nada para testar.'
+        };
     }
 
         const apagados = await pool.query(
@@ -154,6 +157,15 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
     console.log(`  Execuções salvas: ${inseridos} | ` +
         `Pares sem rota encontrada: ${semRota} | ` +
         `Divergências entre algoritmos: ${inconsistencias}`);
+
+    return {
+        executado: true,
+        execucoes_salvas: inseridos,
+        pares_testados: pares.length,
+        pares_sem_rota: semRota,
+        divergencias: inconsistencias,
+        execucoes_antigas_apagadas: apagados.rowCount
+    };
 }
 
 function paraCsv(linhas, colunas) {
@@ -255,11 +267,20 @@ async function main() {
     await exportarCsvs(cenarios);
 }
 
-main()
-    .catch(erro => {
-        console.error('Erro ao rodar experimentos:', erro);
-        process.exitCode = 1;
-    })
-    .finally(async () => {
-        await pool.end();
-    });
+module.exports = {
+    rodarCenario,
+    buscarGrafo,
+    escolherPares,
+    descobrirCenarios
+};
+
+if (require.main === module) {
+    main()
+        .catch(erro => {
+            console.error('Erro ao rodar experimentos:', erro);
+            process.exitCode = 1;
+        })
+        .finally(async () => {
+            await pool.end();
+        });
+}

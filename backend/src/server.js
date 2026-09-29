@@ -6,30 +6,22 @@ const dijkstra = require('./algorithms/dijkstra');
 const bellmanFord = require('./algorithms/bellmanFord');
 const aStar = require('./algorithms/aStar');
 const { construirMatrizDistancias, heuristicaVizinhoMaisProximo } = require('./algorithms/rotaEntrega');
-
+const { rodarCenario } = require('../scripts/rodarExperimentosCompletos');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// Lista de algoritmos disponíveis, usada pelas rotas de
-// comparação e pelo benchmark em lote.
 const ALGORITMOS = [
     { nome: 'Dijkstra', funcao: dijkstra },
     { nome: 'Bellman-Ford', funcao: bellmanFord },
     { nome: 'A*', funcao: aStar }
 ];
 
-// Extrai o cenário informado na query string, com
-// 'padrao' como valor default (cenário original, 12 nós).
 function obterCenario(req) {
     return (req.query.cenario || 'padrao').toString();
 }
 
-// Busca nodes e edges de um cenário específico no banco,
-// incluindo a geometria de cada aresta em GeoJSON (necessária
-// para desenhar no mapa a rota seguindo as ruas reais, quando
-// disponível, em vez de apenas uma linha reta entre os nodes).
 async function buscarGrafo(cenario) {
     const resultadoNodes = await pool.query(
         `SELECT * FROM nodes WHERE scenario = $1 ORDER BY id`,
@@ -91,10 +83,6 @@ app.get('/api/teste-banco', async (req, res) => {
     }
 });
 
-// Lista os cenários existentes no banco, com a
-// quantidade de nodes e edges de cada um. Usado pelo
-// frontend para popular o seletor de cenário e pelos
-// scripts de experimento para saber o que já existe.
 app.get('/api/cenarios', async (req, res) => {
     try {
         const resultado = await pool.query(`
@@ -178,8 +166,6 @@ app.get('/api/grafo', async (req, res) => {
     }
 });
 
-// Monta a resposta padrão de uma rota calculada por um
-// algoritmo, reaproveitada pelas 3 rotas de algoritmo abaixo.
 function montarRespostaRota(nomeAlgoritmo, resultado, nodes, origemId, destinoId) {
     const nomesRota = resultado.rota.map(id => {
         const node = nodes.find(n => n.id === id);
@@ -206,8 +192,6 @@ function montarRespostaRota(nomeAlgoritmo, resultado, nodes, origemId, destinoId
     };
 }
 
-// Valida e extrai origem/destino da query string, retornando
-// null e já respondendo o erro em caso de parâmetros inválidos.
 function validarOrigemDestino(req, res, nodes) {
     const { origem, destino } = req.query;
 
@@ -345,11 +329,6 @@ app.get('/api/rotas/a-star', async (req, res) => {
     }
 });
 
-// Roda os 3 algoritmos várias vezes para o mesmo par
-// origem/destino, salvando cada execução na tabela
-// experiments. Útil para medir o tempo de execução com
-// estabilidade estatística (o tempo de uma única execução
-// é muito suscetível a ruído do sistema operacional).
 app.get('/api/benchmark', async (req, res) => {
     try {
         const cenario = obterCenario(req);
@@ -436,10 +415,55 @@ app.get('/api/benchmark', async (req, res) => {
     }
 });
 
-// Retorna um resumo estatístico (média, mediana, desvio
-// padrão, mínimo e máximo) dos experimentos já salvos no
-// banco, agrupado por cenário e algoritmo. É a base das
-// tabelas comparativas do capítulo de resultados do TCC.
+app.get('/api/experimentos/rodar', async (req, res) => {
+    try {
+        const cenario = obterCenario(req);
+        const repeticoes = Number(req.query.repeticoes) || 10;
+        const maxPares = Number(req.query.maxPares) || 10;
+
+        if (repeticoes < 1 || repeticoes > 200) {
+            return res.status(400).json({
+                sucesso: false,
+                mensagem: 'O número de repetições deve estar entre 1 e 200.'
+            });
+        }
+
+                if (maxPares < 1 || maxPares > 2000) {
+            return res.status(400).json({
+                sucesso: false,
+                mensagem: 'O número máximo de pares deve estar entre 1 e 2000.'
+            });
+        }
+
+        const resultado = await rodarCenario(cenario, repeticoes, maxPares);
+
+        if (!resultado.executado) {
+            return res.status(400).json({
+                sucesso: false,
+                mensagem: resultado.mensagem
+            });
+        }
+
+        res.json({
+            sucesso: true,
+            mensagem: 'Experimentos executados com sucesso.',
+            cenario,
+            repeticoes_por_par: repeticoes,
+            max_pares: maxPares,
+            ...resultado
+        });
+
+    } catch (erro) {
+        console.error('Erro ao rodar experimentos:', erro);
+
+        res.status(500).json({
+            sucesso: false,
+            mensagem: 'Erro ao rodar os experimentos.',
+            erro: erro.message
+        });
+    }
+});
+
 app.get('/api/experimentos/resumo', async (req, res) => {
     try {
         const cenarioFiltro = req.query.cenario || null;
@@ -480,17 +504,8 @@ app.get('/api/experimentos/resumo', async (req, res) => {
     }
 });
 
-// Quantos minutos são somados ao tempo total da rota de
-// entrega para cada ponto visitado (tempo estimado de parada,
-// descarga/entrega no local). Não é somado para a origem.
 const TEMPO_PARADA_MIN = 20;
 
-// Rota de entrega completa: parte da origem do cenário (ex.:
-// UNESC), visita TODOS os demais nós e retorna à origem,
-// minimizando a distância total (heurística do vizinho mais
-// próximo sobre a matriz de distâncias calculada por cada um
-// dos 3 algoritmos). Ver comentários em algorithms/rotaEntrega.js
-// para detalhes do método.
 app.get('/api/rotas/entrega', async (req, res) => {
     try {
         const cenario = obterCenario(req);
