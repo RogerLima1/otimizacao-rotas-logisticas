@@ -29,18 +29,19 @@
 <header class="cabecalho">
     <a href="index.html" class="voltar">← Voltar</a>
     <h1>Rota de Entrega Completa</h1>
-    <p>Dijkstra, Bellman-Ford e A* combinados com o caixeiro-viajante (heurística do vizinho mais próximo)</p>
+    <p>Dijkstra, Bellman-Ford e A* combinados com o caixeiro-viajante (heurística do vizinho mais próximo), em redes com k = 3, 5 e 8</p>
 </header>
 
-<main class="container">
+<main class="container container--largo">
 
     <section class="painel-controle">
 
         <h2>Rota de Entrega Completa (origem → todos os pontos → origem)</h2>
 
         <p class="legenda-secao">
-            Sai da origem, visita todos os pontos e retorna. 
-            
+            Sai da origem, visita todos os pontos e retorna. A rota é
+            calculada em três redes com os mesmos pontos, ligando cada
+            ponto aos seus k vizinhos mais próximos (k = 3, 5 e 8).
         </p>
 
         <div class="campos">
@@ -60,58 +61,58 @@
 
     </section>
 
-    <section class="mapa-section">
+    <section class="mapas-k-section">
 
-        <h2>Mapa da Rede Logística</h2>
-
-        <div id="mapa"></div>
-
-    </section>
-
-    <section class="grafico-section">
-
-        <h2>Tempo para Montar a Matriz de Distâncias</h2>
+        <h2>Caminho Traçado em Cada Rede</h2>
 
         <p class="legenda-secao">
-            Tempo de execução de cada algoritmo para calcular a distância
-            entre todos os pares de pontos do cenário.
+            Em cinza, todas as ruas disponíveis naquela rede; em vermelho,
+            o caminho da rota de entrega, com as paradas numeradas na ordem.
         </p>
 
-        <div class="grafico-container">
-            <canvas id="graficoEntrega"></canvas>
-        </div>
+        <div id="gradeMapasK" class="mapas-k"></div>
 
     </section>
 
-    <section class="rota-entrega-section">
+    <section class="comparacao-k-section">
 
-        <h2>Comparação dos Algoritmos na Rota de Entrega</h2>
+        <h2>Comparação dos Três</h2>
+
+        <div id="vereditoK" class="veredito-k"></div>
 
         <div class="tabela-scroll">
             <table>
 
                 <thead>
                     <tr>
-                        <th>Algoritmo</th>
+                        <th>Rede</th>
+                        <th>Arestas</th>
                         <th>Distância total (km)</th>
-                        <th>Tempo de viagem (h)</th>
+                        <th>Tempo de viagem</th>
                         <th>Paradas</th>
-                        <th>Tempo total c/ paradas (h)</th>
+                        <th>Tempo total c/ paradas</th>
                         <th>Custo total (R$)</th>
-                        <th>Tempo p/ montar matriz (ms)</th>
+                        <th>Dijkstra (ms)</th>
+                        <th>Bellman-Ford (ms)</th>
+                        <th>A* (ms)</th>
+                        <th>Algoritmo mais rápido</th>
                     </tr>
                 </thead>
 
-                <tbody id="tabelaRotaEntrega">
+                <tbody id="tabelaComparacaoK">
                     <tr>
-                        <td colspan="7">Nenhuma rota calculada ainda.</td>
+                        <td colspan="11">Nenhuma rota calculada ainda.</td>
                     </tr>
                 </tbody>
 
             </table>
         </div>
 
-        <div id="ordemVisitaEntrega" class="ordem-visita"></div>
+        <div id="ordemVisitaK"></div>
+
+        <div class="grafico-container grafico-container--k">
+            <canvas id="graficoK"></canvas>
+        </div>
 
     </section>
 
@@ -121,7 +122,7 @@
 
         <p class="legenda-secao">
             Estatísticas de todas as execuções salvas: média, mediana,
-            desvio padrão, mínimo e máximo por cenário e algoritmo.
+            desvio padrão, mínimo e máximo por rede (k) e algoritmo.
         </p>
 
         <button id="btnAtualizarResumo">Atualizar Resumo</button>
@@ -133,7 +134,7 @@
 
                 <thead>
                     <tr>
-                        <th>Cenário</th>
+                        <th>Rede</th>
                         <th>Algoritmo</th>
                         <th>Execuções</th>
                         <th>Dist. média (km)</th>
@@ -171,7 +172,7 @@
     src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js">
 </script>
 
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
 <script src="js/common.js"></script>
 <script src="js/entrega.js"></script>

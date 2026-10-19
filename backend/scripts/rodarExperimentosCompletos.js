@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 
 const pool = require('../src/db/database');
+const { listarCenarios, buscarGrafo } = require('../src/db/grafo');
 const dijkstra = require('../src/algorithms/dijkstra');
 const bellmanFord = require('../src/algorithms/bellmanFord');
 const aStar = require('../src/algorithms/aStar');
@@ -27,25 +28,6 @@ function parseArgumentos() {
     });
 
     return { cenarios, flags };
-}
-
-async function descobrirCenarios() {
-    const resultado = await pool.query(
-        `SELECT DISTINCT scenario FROM nodes ORDER BY scenario`
-    );
-    return resultado.rows.map(r => r.scenario);
-}
-
-async function buscarGrafo(cenario) {
-    const resultadoNodes = await pool.query(
-        `SELECT * FROM nodes WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
-    const resultadoEdges = await pool.query(
-        `SELECT * FROM edges WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
-    return { nodes: resultadoNodes.rows, edges: resultadoEdges.rows };
 }
 
 function escolherPares(nodes, maxPares) {
@@ -77,7 +59,7 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
 
     const { nodes, edges } = await buscarGrafo(cenario);
 
-        if (nodes.length < 2) {
+    if (nodes.length < 2) {
         console.log(`  Ignorado (menos de 2 nós encontrados).`);
         return {
             executado: false,
@@ -85,7 +67,7 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
         };
     }
 
-        const apagados = await pool.query(
+    const apagados = await pool.query(
         `DELETE FROM experiments WHERE scenario = $1`,
         [cenario]
     );
@@ -105,6 +87,7 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
     for (const { origem, destino } of pares) {
 
         let distanciaReferencia = null;
+        let parSemRota = false;
 
         for (const algoritmo of ALGORITMOS) {
             let ultimoResultado = null;
@@ -113,7 +96,7 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
                 const resultado = algoritmo.funcao(nodes, edges, origem, destino);
 
                 if (!resultado) {
-                    if (i === 0) semRota++;
+                    parSemRota = true;
                     continue;
                 }
 
@@ -151,6 +134,10 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
                     );
                 }
             }
+        }
+
+        if (parSemRota) {
+            semRota++;
         }
     }
 
@@ -245,12 +232,12 @@ async function main() {
 
     const cenarios = cenariosArgumento.length > 0
         ? cenariosArgumento
-        : await descobrirCenarios();
+        : await listarCenarios();
 
     if (cenarios.length === 0) {
         console.error(
-            'Nenhum cenário encontrado no banco. Rode antes o seed.sql ' +
-            '(cenário "padrao") ou gere um cenário com gerarCenario.js.'
+            'Nenhum cenário encontrado no banco. Gere um cenário antes com ' +
+            'node scripts/gerarCenarioTintas.js.'
         );
         process.exitCode = 1;
         return;
@@ -267,12 +254,7 @@ async function main() {
     await exportarCsvs(cenarios);
 }
 
-module.exports = {
-    rodarCenario,
-    buscarGrafo,
-    escolherPares,
-    descobrirCenarios
-};
+module.exports = { rodarCenario };
 
 if (require.main === module) {
     main()

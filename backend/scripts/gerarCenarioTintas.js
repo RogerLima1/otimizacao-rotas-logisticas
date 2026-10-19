@@ -2,6 +2,12 @@ const pool = require('../src/db/database');
 
 const NOME_CENARIO = process.argv[2];
 const QTD_DESTINOS = Number(process.argv[3]);
+const VALORES_K = [...new Set(
+    (process.argv[4] || '3')
+        .split(',')
+        .map(v => Number(v.trim()))
+        .filter(v => Number.isInteger(v) && v > 0)
+)];
 
 const ORIGEM = {
     nome: 'UNESC - Universidade do Extremo Sul Catarinense',
@@ -60,6 +66,12 @@ function validarArgumentos() {
             'Uso: node scripts/gerarCenarioTintas.js <nomeCenario> <quantidadeDeDestinos>'
         );
         console.error('Exemplo: node scripts/gerarCenarioTintas.js tintas_pequeno 9');
+        console.error('Comparando k: node scripts/gerarCenarioTintas.js tintas 14 3,5,8');
+        process.exit(1);
+    }
+
+    if (VALORES_K.length === 0) {
+        console.error('Valores de k inválidos. Exemplo: 3,5,8');
         process.exit(1);
     }
 
@@ -170,7 +182,7 @@ function distanciaHaversine(a, b) {
     return R * 2 * Math.atan2(Math.sqrt(x), Math.sqrt(1 - x));
 }
 
-function gerarConexoesPorProximidade(coordenadas, k = 3) {
+function gerarConexoesPorProximidade(coordenadas, k) {
     const quantidade = coordenadas.length;
     const conexoes = new Set();
     const chave = (a, b) => `${Math.min(a, b)}-${Math.max(a, b)}`;
@@ -260,7 +272,7 @@ async function gerarCenario() {
     const destinosEscolhidos = DESTINOS.slice(0, Math.min(QTD_DESTINOS, DESTINOS.length));
     const pontos = [ORIGEM, ...destinosEscolhidos];
 
-    console.log(`Gerando cenário '${NOME_CENARIO}' com ${pontos.length} nós ` +
+    console.log(`Gerando cenário '${NOME_CENARIO}' (k = ${VALORES_K.join(', ')}) com ${pontos.length} nós ` +
         `(UNESC + ${destinosEscolhidos.length} revendas/indústrias de tinta)...\n`);
 
     console.log('Geocodificando endereços (Nominatim)...');
@@ -329,14 +341,31 @@ async function gerarCenario() {
         );
     }
 
+    const cacheRotas = new Map();
+
+    try {
+        for (const k of VALORES_K) {
+            const nomeCenario = VALORES_K.length > 1 ? `${NOME_CENARIO}_k${k}` : NOME_CENARIO;
+            const ok = await gravarCenario(nomeCenario, k, pontos.length, pontosValidos, coordenadas, cacheRotas);
+            if (!ok) {
+                process.exitCode = 1;
+                break;
+            }
+        }
+    } finally {
+        await pool.end();
+    }
+}
+
+async function gravarCenario(nomeCenario, k, totalPlanejado, pontosValidos, coordenadas, cacheRotas) {
     const client = await pool.connect();
 
     try {
         await client.query('BEGIN');
 
-        await client.query(`DELETE FROM experiments WHERE scenario = $1`, [NOME_CENARIO]);
-        await client.query(`DELETE FROM edges WHERE scenario = $1`, [NOME_CENARIO]);
-        await client.query(`DELETE FROM nodes WHERE scenario = $1`, [NOME_CENARIO]);
+        await client.query(`DELETE FROM experiments WHERE scenario = $1`, [nomeCenario]);
+        await client.query(`DELETE FROM edges WHERE scenario = $1`, [nomeCenario]);
+        await client.query(`DELETE FROM nodes WHERE scenario = $1`, [nomeCenario]);
 
         const idsInseridos = [];
 
@@ -349,7 +378,7 @@ async function gerarCenario() {
             `, [
                 pontosValidos[i].nome,
                 pontosValidos[i].tipo,
-                NOME_CENARIO,
+                nomeCenario,
                 coordenadas[i].latitude,
                 coordenadas[i].longitude
             ]);
@@ -357,19 +386,22 @@ async function gerarCenario() {
             idsInseridos.push(resultado.rows[0].id);
         }
 
-        console.log('\nCalculando rotas reais pelas ruas (OSRM)...');
+        console.log(`\n[${nomeCenario}] Calculando rotas reais pelas ruas (OSRM), k = ${k}...`);
 
-        const conexoes = gerarConexoesPorProximidade(coordenadas, 3);
+        const conexoes = gerarConexoesPorProximidade(coordenadas, k);
         let totalArestas = 0;
         let falhasRoteamento = 0;
 
         for (const [a, b] of conexoes) {
             for (const [origemIdx, destinoIdx] of [[a, b], [b, a]]) {
+                const chaveRota = `${origemIdx}-${destinoIdx}`;
+                const emCache = cacheRotas.has(chaveRota);
+
                 try {
-                    const rota = await calcularRotaReal(
-                        coordenadas[origemIdx],
-                        coordenadas[destinoIdx]
-                    );
+                    const rota = emCache
+                        ? cacheRotas.get(chaveRota)
+                        : await calcularRotaReal(coordenadas[origemIdx], coordenadas[destinoIdx]);
+                    cacheRotas.set(chaveRota, rota);
 
                     const custoBrl = rota.distanciaKm * CUSTO_POR_KM;
 
@@ -385,7 +417,7 @@ async function gerarCenario() {
                     `, [
                         idsInseridos[origemIdx],
                         idsInseridos[destinoIdx],
-                        NOME_CENARIO,
+                        nomeCenario,
                         rota.distanciaKm,
                         rota.duracaoMin,
                         custoBrl,
@@ -405,27 +437,30 @@ async function gerarCenario() {
                     );
                 }
 
-                await aguardar(500);
+                if (!emCache) {
+                    await aguardar(500);
+                }
             }
         }
 
         await client.query('COMMIT');
 
-        console.log(`\nCenário '${NOME_CENARIO}' gerado com sucesso:`);
-        console.log(`  - ${pontosValidos.length} nós (de ${pontos.length} planejados)`);
+        console.log(`\nCenário '${nomeCenario}' gerado com sucesso:`);
+        console.log(`  - ${pontosValidos.length} nós (de ${totalPlanejado} planejados)`);
+        console.log(`  - k = ${k} vizinhos mais próximos por nó (${conexoes.length} conexões)`);
         console.log(`  - ${totalArestas} trechos de rua reais (arestas)`);
         if (falhasRoteamento > 0) {
             console.log(`  - ${falhasRoteamento} conexões falharam ao rotear (ver acima)`);
         }
         console.log(`  - ID da UNESC (origem): ${idsInseridos[0]}`);
+        return true;
 
     } catch (erro) {
         await client.query('ROLLBACK');
         console.error('Erro ao gerar cenário:', erro);
-        process.exitCode = 1;
+        return false;
     } finally {
         client.release();
-        await pool.end();
     }
 }
 

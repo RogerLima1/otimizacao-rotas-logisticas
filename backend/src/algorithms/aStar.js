@@ -71,7 +71,6 @@ function aStar(nodes, edges, origemId, destinoId) {
         let atual = null;
         let menorF = Infinity;
 
-        // Procura o node com menor valor de F
         abertos.forEach(nodeId => {
             const nodeAtual = nodesPorId[nodeId];
 

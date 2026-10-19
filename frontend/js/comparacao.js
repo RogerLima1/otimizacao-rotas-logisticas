@@ -3,360 +3,237 @@ const destinoSelect = document.getElementById("destino");
 const btnCalcular = document.getElementById("btnCalcular");
 const mensagem = document.getElementById("mensagem");
 
+const PREFIXOS_CARD = { "Dijkstra": "dijkstra", "Bellman-Ford": "bellman", "A*": "astar" };
+const CAMINHOS_API = { "Dijkstra": "dijkstra", "Bellman-Ford": "bellman-ford", "A*": "a-star" };
+
+const mapa = criarMapa("mapa");
+
+let grafoAtual = null;
+let camadaRede = null;
+let camadaRota = null;
 let graficoExecucao = null;
 
-async function carregarNodes() {
+async function carregarCenarios() {
 
-try {
+    try {
 
-    const resposta = await fetch(
-        `${API_URL}/api/nodes?cenario=${cenarioAtual()}`
-    );
+        const cenarios = await buscarCenarios();
 
-    const dados = await resposta.json();
+        preencherSelectCenarios(
+            cenarios
+                .filter(c => !separarVarianteK(c.cenario))
+                .map(c => ({ nome: c.cenario, totalNodes: c.total_nodes }))
+        );
 
-    if (!dados.sucesso) {
-        throw new Error("Não foi possível carregar os nodes.");
+        if (!cenarioSelect.value) {
+            mensagem.textContent =
+                "Nenhum cenário encontrado no banco. Gere um com node scripts/gerarCenarioTintas.js.";
+        }
+
+    } catch (erro) {
+
+        console.error(erro);
+        mensagem.textContent =
+            "Erro ao carregar os cenários. Verifique se o backend está rodando.";
     }
-
-    origemSelect.innerHTML = "";
-    destinoSelect.innerHTML = "";
-
-    const nodeOrigem =
-        dados.nodes.find(node => node.node_type === "origem") ||
-        dados.nodes[0];
-
-    const optionOrigem = document.createElement("option");
-    optionOrigem.value = nodeOrigem.id;
-    optionOrigem.textContent = nodeOrigem.name;
-    origemSelect.appendChild(optionOrigem);
-
-    origemSelect.value = nodeOrigem.id;
-    origemSelect.disabled = true;
-
-    dados.nodes
-        .filter(node => node.id !== nodeOrigem.id)
-        .forEach(node => {
-
-            const optionDestino = document.createElement("option");
-
-            optionDestino.value = node.id;
-            optionDestino.textContent = node.name;
-
-            destinoSelect.appendChild(optionDestino);
-
-        });
-
-    if (destinoSelect.options.length > 0) {
-        destinoSelect.value = destinoSelect.options[destinoSelect.options.length - 1].value;
-    }
-
-} catch (erro) {
-
-    console.error(erro);
-
-    mensagem.textContent =
-        "Erro ao carregar os pontos da rede.";
-
 }
 
+async function carregarCenarioNoMapa() {
+
+    limparResultados();
+
+    if (camadaRede) {
+        mapa.removeLayer(camadaRede);
+        camadaRede = null;
+    }
+
+    if (!cenarioAtual()) return;
+
+    try {
+
+        grafoAtual = await buscarGrafo(cenarioAtual());
+        camadaRede = desenharRede(mapa, grafoAtual);
+
+        const nodeOrigem =
+            grafoAtual.nodes.find(node => node.node_type === "origem") ||
+            grafoAtual.nodes[0];
+
+        origemSelect.innerHTML = `<option value="${nodeOrigem.id}">${nodeOrigem.name}</option>`;
+        origemSelect.disabled = true;
+
+        destinoSelect.innerHTML = "";
+
+        grafoAtual.nodes
+            .filter(node => node.id !== nodeOrigem.id)
+            .forEach(node => {
+                const option = document.createElement("option");
+                option.value = node.id;
+                option.textContent = node.name;
+                destinoSelect.appendChild(option);
+            });
+
+        if (destinoSelect.options.length > 0) {
+            destinoSelect.value = destinoSelect.options[destinoSelect.options.length - 1].value;
+        }
+
+    } catch (erro) {
+
+        console.error(erro);
+        mensagem.textContent = "Erro ao carregar os pontos da rede.";
+    }
+}
+
+function limparResultados() {
+
+    mensagem.textContent = "";
+
+    if (camadaRota) {
+        mapa.removeLayer(camadaRota);
+        camadaRota = null;
+    }
+
+    Object.values(PREFIXOS_CARD).forEach(prefixo => {
+        ["distancia", "custo", "tempo", "execucao"].forEach(campo => {
+            document.getElementById(`${prefixo}-${campo}`).textContent = "-";
+        });
+    });
+
+    document.getElementById("tabelaResultados").innerHTML =
+        `<tr><td colspan="5">Nenhum resultado calculado.</td></tr>`;
+    document.getElementById("caminhoRotaSimples").innerHTML = "";
+
+    if (graficoExecucao) {
+        graficoExecucao.destroy();
+        graficoExecucao = null;
+    }
 }
 
 async function calcularRotas() {
 
-const origem = origemSelect.value;
-const destino = destinoSelect.value;
-const cenario = cenarioAtual();
+    const origem = origemSelect.value;
+    const destino = destinoSelect.value;
+    const cenario = encodeURIComponent(cenarioAtual());
 
-if (!origem || !destino) {
-
-    mensagem.textContent =
-        "Selecione a origem e o destino.";
-
-    return;
-}
-
-if (origem === destino) {
-
-    mensagem.textContent =
-        "A origem e o destino devem ser diferentes.";
-
-    return;
-}
-
-mensagem.textContent =
-    "Calculando rotas...";
-
-try {
-
-    const [dijkstra, bellmanFord, aStar] =
-        await Promise.all([
-
-            fetch(
-                `${API_URL}/api/rotas/dijkstra?cenario=${cenario}&origem=${origem}&destino=${destino}`
-            ).then(res => res.json()),
-
-            fetch(
-                `${API_URL}/api/rotas/bellman-ford?cenario=${cenario}&origem=${origem}&destino=${destino}`
-            ).then(res => res.json()),
-
-            fetch(
-                `${API_URL}/api/rotas/a-star?cenario=${cenario}&origem=${origem}&destino=${destino}`
-            ).then(res => res.json())
-
-        ]);
-
-    if (
-        !dijkstra.sucesso ||
-        !bellmanFord.sucesso ||
-        !aStar.sucesso
-    ) {
-
-        throw new Error(
-            "Um ou mais algoritmos não retornaram resultados."
-        );
-
+    if (!origem || !destino) {
+        mensagem.textContent = "Selecione a origem e o destino.";
+        return;
     }
 
-    mostrarResultado(
-        "dijkstra",
-        dijkstra
-    );
+    mensagem.textContent = "Calculando rotas...";
 
-    mostrarResultado(
-        "bellman",
-        bellmanFord
-    );
+    try {
 
-    mostrarResultado(
-        "astar",
-        aStar
-    );
+        const resultados = await Promise.all(NOMES_ALGORITMOS.map(nome =>
+            fetch(
+                `${API_URL}/api/rotas/${CAMINHOS_API[nome]}?cenario=${cenario}&origem=${origem}&destino=${destino}`
+            ).then(res => res.json())
+        ));
 
-    atualizarTabela(
-        dijkstra,
-        bellmanFord,
-        aStar
-    );
+        const falha = resultados.find(r => !r.sucesso);
 
-    document.getElementById("caminhoRotaSimples").innerHTML =
-    `<strong style="color:${corAlgoritmo('Dijkstra')}">Dijkstra:</strong> ` +
-    dijkstra.rota.join(" → ") +
-    `<br><strong style="color:${corAlgoritmo('Bellman-Ford')}">Bellman-Ford:</strong> ` +
-    bellmanFord.rota.join(" → ") +
-    `<br><strong style="color:${corAlgoritmo('A*')}">A*:</strong> ` +
-    aStar.rota.join(" → ");
+        if (falha) {
+            throw new Error(falha.mensagem || "Um ou mais algoritmos não retornaram resultados.");
+        }
 
-    atualizarGraficoExecucao(
-    dijkstra,
-    bellmanFord,
-    aStar
-    );
+        resultados.forEach(mostrarResultado);
+        atualizarTabela(resultados);
+        atualizarGraficoExecucao(resultados);
 
-    destacarRotaNoMapa(dijkstra.rota_ids);
+        document.getElementById("caminhoRotaSimples").innerHTML = resultados
+            .map(r => `<strong style="color: ${corAlgoritmo(r.algoritmo)}">${r.algoritmo}:</strong> ${r.rota.join(" → ")}`)
+            .join("<br>");
 
-    mensagem.textContent =
-        "Rotas calculadas com sucesso.";
+        if (camadaRota) {
+            mapa.removeLayer(camadaRota);
+        }
 
-} catch (erro) {
+        camadaRota = desenharRota(mapa, grafoAtual, resultados[0].rota_ids);
 
-    console.error(erro);
+        mensagem.textContent = "Rotas calculadas com sucesso.";
 
-    mensagem.textContent =
-        "Erro ao calcular as rotas.";
+    } catch (erro) {
 
+        console.error(erro);
+        mensagem.textContent = "Erro ao calcular as rotas.";
+    }
 }
 
+function mostrarResultado(resultado) {
+
+    const prefixo = PREFIXOS_CARD[resultado.algoritmo];
+
+    document.getElementById(`${prefixo}-distancia`).textContent = `${resultado.distancia_km} km`;
+    document.getElementById(`${prefixo}-custo`).textContent = `R$ ${resultado.custo_brl.toFixed(2)}`;
+    document.getElementById(`${prefixo}-tempo`).textContent = formatarHoras(resultado.tempo_min);
+    document.getElementById(`${prefixo}-execucao`).textContent = `${resultado.tempo_execucao_ms} ms`;
 }
 
-function mostrarResultado(prefixo, resultado) {
+function atualizarTabela(resultados) {
 
-document.getElementById(
-    `${prefixo}-distancia`
-).textContent =
-    `${resultado.distancia_km} km`;
+    const tabela = document.getElementById("tabelaResultados");
+    tabela.innerHTML = "";
 
-document.getElementById(
-    `${prefixo}-custo`
-).textContent =
-    `R$ ${resultado.custo_brl.toFixed(2)}`;
+    resultados.forEach(resultado => {
 
-document.getElementById(
-    `${prefixo}-tempo`
-).textContent =
-    `${formatarHoras(resultado.tempo_min)}`;
+        const linha = document.createElement("tr");
 
-document.getElementById(
-    `${prefixo}-execucao`
-).textContent =
-    `${resultado.tempo_execucao_ms} ms`;
+        linha.innerHTML = `
+            <td style="color: ${corAlgoritmo(resultado.algoritmo)}">${resultado.algoritmo}</td>
+            <td>${resultado.distancia_km} km</td>
+            <td>R$ ${resultado.custo_brl.toFixed(2)}</td>
+            <td>${formatarHoras(resultado.tempo_min)}</td>
+            <td>${resultado.tempo_execucao_ms} ms</td>
+        `;
 
+        tabela.appendChild(linha);
+    });
 }
 
-function atualizarTabela(
-dijkstra,
-bellmanFord,
-aStar
-) {
-
-const tabela =
-    document.getElementById(
-        "tabelaResultados"
-    );
-
-tabela.innerHTML = "";
-
-const resultados = [
-    dijkstra,
-    bellmanFord,
-    aStar
-];
-
-resultados.forEach(resultado => {
-
-    const linha =
-        document.createElement("tr");
-
-    linha.innerHTML = `
-
-        <td style="color: ${corAlgoritmo(resultado.algoritmo)}">${resultado.algoritmo}</td>
-
-        <td>
-            ${resultado.distancia_km} km
-        </td>
-
-        <td>
-            R$ ${resultado.custo_brl.toFixed(2)}
-        </td>
-
-        <td>
-            ${formatarHoras(resultado.tempo_min)}
-        </td>
-
-        <td>
-            ${resultado.tempo_execucao_ms} ms
-        </td>
-
-    `;
-
-    tabela.appendChild(linha);
-
-});
-
-}
-
-function atualizarGraficoExecucao(
-    dijkstra,
-    bellmanFord,
-    aStar
-) {
-
-    const canvas =
-        document.getElementById("graficoExecucao");
-
-    const dados = [
-        dijkstra.tempo_execucao_ms,
-        bellmanFord.tempo_execucao_ms,
-        aStar.tempo_execucao_ms
-    ];
-
-    const coresAlgoritmos = ["#0E7C86", "#B8752E", "#6D4E9C"];
+function atualizarGraficoExecucao(resultados) {
 
     if (graficoExecucao) {
         graficoExecucao.destroy();
     }
 
-    graficoExecucao = new Chart(canvas, {
-
+    graficoExecucao = new Chart(document.getElementById("graficoExecucao"), {
         type: "bar",
-
         data: {
-
-            labels: [
-                "Dijkstra",
-                "Bellman-Ford",
-                "A*"
-            ],
-
+            labels: resultados.map(r => r.algoritmo),
             datasets: [
-
                 {
                     label: "Tempo de execução (ms)",
-                    data: dados,
-                    backgroundColor: coresAlgoritmos,
+                    data: resultados.map(r => r.tempo_execucao_ms),
+                    backgroundColor: resultados.map(r => corAlgoritmo(r.algoritmo)),
                     borderRadius: 3
                 }
-
             ]
-
         },
-
         options: {
-
             responsive: true,
-
             maintainAspectRatio: false,
-
             scales: {
-
                 y: {
-
                     beginAtZero: true,
-
-                    title: {
-                        display: true,
-                        text: "Tempo de execução (ms)"
-                    }
-
+                    title: { display: true, text: "Tempo de execução (ms)" }
                 },
-
                 x: {
-
-                    title: {
-                        display: true,
-                        text: "Algoritmo"
-                    }
-
+                    title: { display: true, text: "Algoritmo" }
                 }
-
             },
-
             plugins: {
-
-                legend: {
-                    display: false
-                },
-
-                title: {
-                    display: true,
-                    text: "Comparação do tempo de execução"
-                }
-
+                legend: { display: false },
+                title: { display: true, text: "Comparação do tempo de execução" }
             }
-
         }
-
     });
 }
 
-btnCalcular.addEventListener(
-"click",
-calcularRotas
-);
-
-cenarioSelect.addEventListener("change", async () => {
-    mensagem.textContent = "";
-
-    limparRotaDestacada();
-
-    await carregarNodes();
-    await carregarGrafoNoMapa();
-});
+btnCalcular.addEventListener("click", calcularRotas);
+cenarioSelect.addEventListener("change", carregarCenarioNoMapa);
 
 async function iniciar() {
     await carregarCenarios();
-    await carregarNodes();
-    await inicializarMapa();
+    await carregarCenarioNoMapa();
 }
 
 iniciar();

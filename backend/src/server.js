@@ -2,65 +2,40 @@ const express = require('express');
 const cors = require('cors');
 
 const pool = require('./db/database');
+const { buscarGrafo } = require('./db/grafo');
 const dijkstra = require('./algorithms/dijkstra');
 const bellmanFord = require('./algorithms/bellmanFord');
 const aStar = require('./algorithms/aStar');
 const { construirMatrizDistancias, heuristicaVizinhoMaisProximo } = require('./algorithms/rotaEntrega');
 const { rodarCenario } = require('../scripts/rodarExperimentosCompletos');
+
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
 const ALGORITMOS = [
-    { nome: 'Dijkstra', funcao: dijkstra },
-    { nome: 'Bellman-Ford', funcao: bellmanFord },
-    { nome: 'A*', funcao: aStar }
+    { nome: 'Dijkstra', caminho: 'dijkstra', funcao: dijkstra },
+    { nome: 'Bellman-Ford', caminho: 'bellman-ford', funcao: bellmanFord },
+    { nome: 'A*', caminho: 'a-star', funcao: aStar }
 ];
 
+const TEMPO_PARADA_MIN = 20;
+const MAX_NOS_ENTREGA = 60;
+
 function obterCenario(req) {
-    return (req.query.cenario || 'padrao').toString();
+    return (req.query.cenario || '').toString();
 }
 
-async function buscarGrafo(cenario) {
-    const resultadoNodes = await pool.query(
-        `SELECT * FROM nodes WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
+function responderErro(res, mensagem, erro) {
+    console.error(`${mensagem}:`, erro);
 
-    const resultadoEdges = await pool.query(
-        `SELECT *, ST_AsGeoJSON(geom) AS geom_geojson
-         FROM edges WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
-
-    const edgesComGeometria = resultadoEdges.rows.map(edge => {
-        let geometria = null;
-
-        try {
-            const geoJson = JSON.parse(edge.geom_geojson);
-            // GeoJSON usa [longitude, latitude]; o Leaflet espera
-            // [latitude, longitude], então invertemos aqui.
-            geometria = geoJson.coordinates.map(([lon, lat]) => [lat, lon]);
-        } catch (erro) {
-            geometria = null;
-        }
-
-        const { geom_geojson, ...resto } = edge;
-        return { ...resto, geometria };
+    res.status(500).json({
+        sucesso: false,
+        mensagem,
+        erro: erro.message
     });
-
-    return {
-        nodes: resultadoNodes.rows,
-        edges: edgesComGeometria
-    };
 }
-
-app.get('/', (req, res) => {
-    res.json({
-        mensagem: 'API de Rotas Logísticas funcionando!'
-    });
-});
 
 app.get('/api/teste-banco', async (req, res) => {
     try {
@@ -73,13 +48,7 @@ app.get('/api/teste-banco', async (req, res) => {
         });
 
     } catch (erro) {
-        console.error('Erro ao conectar ao banco:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao conectar ao banco de dados.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao conectar ao banco de dados', erro);
     }
 });
 
@@ -88,12 +57,11 @@ app.get('/api/cenarios', async (req, res) => {
         const resultado = await pool.query(`
             SELECT
                 n.scenario AS cenario,
-                COUNT(DISTINCT n.id) AS total_nodes,
-                COUNT(DISTINCT e.id) AS total_edges
+                COUNT(*) AS total_nodes,
+                (SELECT COUNT(*) FROM edges e WHERE e.scenario = n.scenario) AS total_edges
             FROM nodes n
-            LEFT JOIN edges e ON e.scenario = n.scenario
             GROUP BY n.scenario
-            ORDER BY total_nodes ASC
+            ORDER BY total_nodes, cenario
         `);
 
         res.json({
@@ -106,40 +74,7 @@ app.get('/api/cenarios', async (req, res) => {
         });
 
     } catch (erro) {
-        console.error('Erro ao listar cenários:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao listar os cenários.',
-            erro: erro.message
-        });
-    }
-});
-
-app.get('/api/nodes', async (req, res) => {
-    try {
-        const cenario = obterCenario(req);
-
-        const resultado = await pool.query(
-            `SELECT * FROM nodes WHERE scenario = $1 ORDER BY id`,
-            [cenario]
-        );
-
-        res.json({
-            sucesso: true,
-            cenario,
-            quantidade: resultado.rows.length,
-            nodes: resultado.rows
-        });
-
-    } catch (erro) {
-        console.error('Erro ao buscar nodes:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao buscar os nodes.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao listar os cenários', erro);
     }
 });
 
@@ -156,60 +91,18 @@ app.get('/api/grafo', async (req, res) => {
         });
 
     } catch (erro) {
-        console.error('Erro ao buscar o grafo:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao buscar os dados do grafo.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao buscar os dados do grafo', erro);
     }
 });
 
-function montarRespostaRota(nomeAlgoritmo, resultado, nodes, origemId, destinoId) {
-    const nomesRota = resultado.rota.map(id => {
-        const node = nodes.find(n => n.id === id);
-        return node ? node.name : `Node ${id}`;
-    });
-
-    return {
-        sucesso: true,
-        algoritmo: nomeAlgoritmo,
-        origem: {
-            id: origemId,
-            nome: nodes.find(n => n.id === origemId)?.name
-        },
-        destino: {
-            id: destinoId,
-            nome: nodes.find(n => n.id === destinoId)?.name
-        },
-        rota: nomesRota,
-        rota_ids: resultado.rota,
-        distancia_km: resultado.distancia_km,
-        custo_brl: resultado.custo_brl,
-        tempo_min: resultado.tempo_min,
-        tempo_execucao_ms: resultado.tempo_execucao_ms
-    };
-}
-
 function validarOrigemDestino(req, res, nodes) {
-    const { origem, destino } = req.query;
+    const origemId = Number(req.query.origem);
+    const destinoId = Number(req.query.destino);
 
-    if (!origem || !destino) {
+    if (!req.query.origem || !req.query.destino || Number.isNaN(origemId) || Number.isNaN(destinoId)) {
         res.status(400).json({
             sucesso: false,
-            mensagem: 'Informe os parâmetros origem e destino.'
-        });
-        return null;
-    }
-
-    const origemId = Number(origem);
-    const destinoId = Number(destino);
-
-    if (Number.isNaN(origemId) || Number.isNaN(destinoId)) {
-        res.status(400).json({
-            sucesso: false,
-            mensagem: 'Os parâmetros origem e destino devem ser numéricos.'
+            mensagem: 'Informe origem e destino numéricos.'
         });
         return null;
     }
@@ -222,10 +115,7 @@ function validarOrigemDestino(req, res, nodes) {
         return null;
     }
 
-    const origemExiste = nodes.some(n => n.id === origemId);
-    const destinoExiste = nodes.some(n => n.id === destinoId);
-
-    if (!origemExiste || !destinoExiste) {
+    if (!nodes.some(n => n.id === origemId) || !nodes.some(n => n.id === destinoId)) {
         res.status(404).json({
             sucesso: false,
             mensagem: 'Origem ou destino não pertencem ao cenário informado.'
@@ -236,100 +126,45 @@ function validarOrigemDestino(req, res, nodes) {
     return { origemId, destinoId };
 }
 
-app.get('/api/rotas/dijkstra', async (req, res) => {
-    try {
-        const cenario = obterCenario(req);
-        const { nodes, edges } = await buscarGrafo(cenario);
+ALGORITMOS.forEach(algoritmo => {
+    app.get(`/api/rotas/${algoritmo.caminho}`, async (req, res) => {
+        try {
+            const { nodes, edges } = await buscarGrafo(obterCenario(req));
 
-        const idsValidados = validarOrigemDestino(req, res, nodes);
-        if (!idsValidados) return;
-        const { origemId, destinoId } = idsValidados;
+            const ids = validarOrigemDestino(req, res, nodes);
+            if (!ids) return;
 
-        const resultado = dijkstra(nodes, edges, origemId, destinoId);
+            const resultado = algoritmo.funcao(nodes, edges, ids.origemId, ids.destinoId);
 
-        if (!resultado) {
-            return res.status(404).json({
-                sucesso: false,
-                mensagem: 'Não foi encontrada uma rota entre os nodes informados.'
+            if (!resultado) {
+                return res.status(404).json({
+                    sucesso: false,
+                    mensagem: 'Não foi encontrada uma rota entre os nodes informados.'
+                });
+            }
+
+            const nomePorId = id => nodes.find(n => n.id === id)?.name ?? `Node ${id}`;
+
+            res.json({
+                sucesso: true,
+                algoritmo: algoritmo.nome,
+                origem: { id: ids.origemId, nome: nomePorId(ids.origemId) },
+                destino: { id: ids.destinoId, nome: nomePorId(ids.destinoId) },
+                rota: resultado.rota.map(nomePorId),
+                rota_ids: resultado.rota,
+                distancia_km: resultado.distancia_km,
+                custo_brl: resultado.custo_brl,
+                tempo_min: resultado.tempo_min,
+                tempo_execucao_ms: resultado.tempo_execucao_ms
             });
+
+        } catch (erro) {
+            responderErro(res, `Erro ao executar o algoritmo ${algoritmo.nome}`, erro);
         }
-
-        res.json(montarRespostaRota('Dijkstra', resultado, nodes, origemId, destinoId));
-
-    } catch (erro) {
-        console.error('Erro ao executar Dijkstra:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao executar o algoritmo Dijkstra.',
-            erro: erro.message
-        });
-    }
+    });
 });
 
-app.get('/api/rotas/bellman-ford', async (req, res) => {
-    try {
-        const cenario = obterCenario(req);
-        const { nodes, edges } = await buscarGrafo(cenario);
-
-        const idsValidados = validarOrigemDestino(req, res, nodes);
-        if (!idsValidados) return;
-        const { origemId, destinoId } = idsValidados;
-
-        const resultado = bellmanFord(nodes, edges, origemId, destinoId);
-
-        if (!resultado) {
-            return res.status(404).json({
-                sucesso: false,
-                mensagem: 'Não foi encontrada uma rota entre os nodes informados.'
-            });
-        }
-
-        res.json(montarRespostaRota('Bellman-Ford', resultado, nodes, origemId, destinoId));
-
-    } catch (erro) {
-        console.error('Erro ao executar Bellman-Ford:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao executar o algoritmo Bellman-Ford.',
-            erro: erro.message
-        });
-    }
-});
-
-app.get('/api/rotas/a-star', async (req, res) => {
-    try {
-        const cenario = obterCenario(req);
-        const { nodes, edges } = await buscarGrafo(cenario);
-
-        const idsValidados = validarOrigemDestino(req, res, nodes);
-        if (!idsValidados) return;
-        const { origemId, destinoId } = idsValidados;
-
-        const resultado = aStar(nodes, edges, origemId, destinoId);
-
-        if (!resultado) {
-            return res.status(404).json({
-                sucesso: false,
-                mensagem: 'Não foi encontrada uma rota entre os nodes informados.'
-            });
-        }
-
-        res.json(montarRespostaRota('A*', resultado, nodes, origemId, destinoId));
-
-    } catch (erro) {
-        console.error('Erro ao executar A*:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao executar o algoritmo A*.',
-            erro: erro.message
-        });
-    }
-});
-
-app.get('/api/benchmark', async (req, res) => {
+app.get('/api/rotas/entrega', async (req, res) => {
     try {
         const cenario = obterCenario(req);
         const { nodes, edges } = await buscarGrafo(cenario);
@@ -341,77 +176,61 @@ app.get('/api/benchmark', async (req, res) => {
             });
         }
 
-        const origem = Number(req.query.origem) || nodes[0].id;
-        const destino = Number(req.query.destino) || nodes[nodes.length - 1].id;
-        const repeticoes = Number(req.query.repeticoes) || 100;
-
-        if (repeticoes < 1 || repeticoes > 1000) {
+        if (nodes.length > MAX_NOS_ENTREGA) {
             return res.status(400).json({
                 sucesso: false,
-                mensagem: 'O número de repetições deve estar entre 1 e 1000.'
+                mensagem: `Cenário grande demais para a rota de entrega completa ` +
+                    `(mais de ${MAX_NOS_ENTREGA} nós). Use um cenário menor.`
             });
         }
 
-        const resultados = [];
+        const nodeOrigem = nodes.find(n => n.node_type === 'origem') || nodes[0];
+        const nomePorId = id => nodes.find(n => n.id === id)?.name ?? `Node ${id}`;
+
+        const resultados = {};
 
         for (const algoritmo of ALGORITMOS) {
-            for (let i = 0; i < repeticoes; i++) {
+            const { matriz, tempoExecucaoTotalMs } =
+                construirMatrizDistancias(nodes, edges, algoritmo.funcao);
 
-                const resultado = algoritmo.funcao(nodes, edges, origem, destino);
+            const rota = heuristicaVizinhoMaisProximo(
+                nodes, matriz, nodeOrigem.id, TEMPO_PARADA_MIN
+            );
 
-                if (!resultado) {
-                    continue;
-                }
-
-                await pool.query(`
-                    INSERT INTO experiments (
-                        scenario, algorithm, source_id, target_id,
-                        distance_km, travel_time_min, cost_brl,
-                        execution_ms, path_nodes, reachable
-                    )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
-                `, [
-                    cenario,
-                    algoritmo.nome,
-                    origem,
-                    destino,
-                    resultado.distancia_km,
-                    resultado.tempo_min,
-                    resultado.custo_brl,
-                    resultado.tempo_execucao_ms,
-                    resultado.rota
-                ]);
-
-                resultados.push({
-                    algoritmo: algoritmo.nome,
-                    execucao: i + 1,
-                    distancia_km: resultado.distancia_km,
-                    custo_brl: resultado.custo_brl,
-                    tempo_min: resultado.tempo_min,
-                    tempo_execucao_ms: resultado.tempo_execucao_ms
-                });
+            if (!rota.sucesso) {
+                resultados[algoritmo.nome] = {
+                    sucesso: false,
+                    mensagem: rota.motivo
+                };
+                continue;
             }
+
+            resultados[algoritmo.nome] = {
+                sucesso: true,
+                ordem_visita: rota.ordemVisita.map(nomePorId),
+                ordem_visita_ids: rota.ordemVisita,
+                rota_completa_ids: rota.rotaCompletaIds,
+                distancia_total_km: Number(rota.distanciaTotalKm.toFixed(3)),
+                tempo_viagem_total_min: Number(rota.tempoViagemTotalMin.toFixed(2)),
+                quantidade_paradas: rota.quantidadeParadas,
+                tempo_paradas_min: rota.tempoParadasMin,
+                tempo_total_com_paradas_min: Number(rota.tempoTotalComParadasMin.toFixed(2)),
+                custo_total_brl: Number(rota.custoTotalBrl.toFixed(2)),
+                tempo_execucao_matriz_ms: Number(tempoExecucaoTotalMs.toFixed(4))
+            };
         }
 
         res.json({
             sucesso: true,
-            mensagem: 'Benchmark executado com sucesso.',
             cenario,
-            origem,
-            destino,
-            repeticoes_por_algoritmo: repeticoes,
-            total_execucoes: resultados.length,
+            origem: { id: nodeOrigem.id, nome: nodeOrigem.name },
+            total_nos: nodes.length,
+            tempo_parada_por_no_min: TEMPO_PARADA_MIN,
             resultados
         });
 
     } catch (erro) {
-        console.error('Erro ao executar benchmark:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao executar o benchmark.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao calcular a rota de entrega', erro);
     }
 });
 
@@ -428,7 +247,7 @@ app.get('/api/experimentos/rodar', async (req, res) => {
             });
         }
 
-                if (maxPares < 1 || maxPares > 2000) {
+        if (maxPares < 1 || maxPares > 2000) {
             return res.status(400).json({
                 sucesso: false,
                 mensagem: 'O número máximo de pares deve estar entre 1 e 2000.'
@@ -454,13 +273,7 @@ app.get('/api/experimentos/rodar', async (req, res) => {
         });
 
     } catch (erro) {
-        console.error('Erro ao rodar experimentos:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao rodar os experimentos.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao rodar os experimentos', erro);
     }
 });
 
@@ -473,7 +286,6 @@ app.get('/api/experimentos/resumo', async (req, res) => {
                 scenario,
                 algorithm,
                 COUNT(*) FILTER (WHERE reachable) AS execucoes_com_rota,
-                COUNT(*) FILTER (WHERE NOT reachable) AS execucoes_sem_rota,
                 AVG(distance_km) FILTER (WHERE reachable) AS media_distancia_km,
                 AVG(cost_brl) FILTER (WHERE reachable) AS media_custo_brl,
                 AVG(travel_time_min) FILTER (WHERE reachable) AS media_tempo_min,
@@ -494,95 +306,7 @@ app.get('/api/experimentos/resumo', async (req, res) => {
         });
 
     } catch (erro) {
-        console.error('Erro ao gerar resumo dos experimentos:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao gerar o resumo dos experimentos.',
-            erro: erro.message
-        });
-    }
-});
-
-const TEMPO_PARADA_MIN = 20;
-
-app.get('/api/rotas/entrega', async (req, res) => {
-    try {
-        const cenario = obterCenario(req);
-        const { nodes, edges } = await buscarGrafo(cenario);
-
-        if (nodes.length === 0) {
-            return res.status(404).json({
-                sucesso: false,
-                mensagem: `Cenário '${cenario}' não encontrado ou sem nodes.`
-            });
-        }
-
-        if (nodes.length > 60) {
-            return res.status(400).json({
-                sucesso: false,
-                mensagem: 'Cenário grande demais para a rota de entrega completa ' +
-                    '(mais de 60 nós). Use um cenário menor.'
-            });
-        }
-
-        const nodeOrigem = nodes.find(n => n.node_type === 'origem') || nodes[0];
-
-        const resultadosPorAlgoritmo = {};
-
-        for (const algoritmo of ALGORITMOS) {
-            const { matriz, tempoExecucaoTotalMs } =
-                construirMatrizDistancias(nodes, edges, algoritmo.funcao);
-
-            const rota = heuristicaVizinhoMaisProximo(
-                nodes, matriz, nodeOrigem.id, TEMPO_PARADA_MIN
-            );
-
-            if (!rota.sucesso) {
-                resultadosPorAlgoritmo[algoritmo.nome] = {
-                    sucesso: false,
-                    mensagem: rota.motivo
-                };
-                continue;
-            }
-
-            const nomesOrdemVisita = rota.ordemVisita.map(id => {
-                const node = nodes.find(n => n.id === id);
-                return node ? node.name : `Node ${id}`;
-            });
-
-            resultadosPorAlgoritmo[algoritmo.nome] = {
-                sucesso: true,
-                ordem_visita: nomesOrdemVisita,
-                ordem_visita_ids: rota.ordemVisita,
-                rota_completa_ids: rota.rotaCompletaIds,
-                distancia_total_km: Number(rota.distanciaTotalKm.toFixed(3)),
-                tempo_viagem_total_min: Number(rota.tempoViagemTotalMin.toFixed(2)),
-                quantidade_paradas: rota.quantidadeParadas,
-                tempo_paradas_min: rota.tempoParadasMin,
-                tempo_total_com_paradas_min: Number(rota.tempoTotalComParadasMin.toFixed(2)),
-                custo_total_brl: Number(rota.custoTotalBrl.toFixed(2)),
-                tempo_execucao_matriz_ms: Number(tempoExecucaoTotalMs.toFixed(4))
-            };
-        }
-
-        res.json({
-            sucesso: true,
-            cenario,
-            origem: { id: nodeOrigem.id, nome: nodeOrigem.name },
-            total_nos: nodes.length,
-            tempo_parada_por_no_min: TEMPO_PARADA_MIN,
-            resultados: resultadosPorAlgoritmo
-        });
-
-    } catch (erro) {
-        console.error('Erro ao calcular rota de entrega:', erro);
-
-        res.status(500).json({
-            sucesso: false,
-            mensagem: 'Erro ao calcular a rota de entrega.',
-            erro: erro.message
-        });
+        responderErro(res, 'Erro ao gerar o resumo dos experimentos', erro);
     }
 });
 

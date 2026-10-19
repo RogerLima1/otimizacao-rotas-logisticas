@@ -2,50 +2,39 @@ const API_URL = "http://localhost:3000";
 
 const cenarioSelect = document.getElementById("cenario");
 
-let mapa = null;
-let camadaGrafo = null;
-let nodesPorIdAtual = {};
-let edgesPorParAtual = {};
+const NOMES_ALGORITMOS = ["Dijkstra", "Bellman-Ford", "A*"];
 
 function cenarioAtual() {
-    return cenarioSelect.value || "padrao";
+    return cenarioSelect.value;
 }
 
-async function carregarCenarios() {
+async function buscarCenarios() {
 
-    try {
+    const resposta = await fetch(`${API_URL}/api/cenarios`);
+    const dados = await resposta.json();
 
-        const resposta = await fetch(`${API_URL}/api/cenarios`);
-        const dados = await resposta.json();
-
-        if (!dados.sucesso || dados.cenarios.length === 0) {
-            throw new Error("Nenhum cenário encontrado no banco.");
-        }
-
-        cenarioSelect.innerHTML = "";
-
-        dados.cenarios.forEach(item => {
-            const option = document.createElement("option");
-            option.value = item.cenario;
-            option.textContent =
-                `${item.cenario} (${item.total_nodes} nós, ${item.total_edges} arestas)`;
-            cenarioSelect.appendChild(option);
-        });
-
-        const existePadrao = dados.cenarios.some(c => c.cenario === "padrao");
-        cenarioSelect.value = existePadrao ? "padrao" : dados.cenarios[0].cenario;
-
-    } catch (erro) {
-
-        console.error(erro);
-
-        const mensagem = document.getElementById("mensagem");
-        if (mensagem) {
-            mensagem.textContent =
-                "Erro ao carregar os cenários. Verifique se o banco foi " +
-                "populado (schema.sql + seed.sql).";
-        }
+    if (!dados.sucesso) {
+        throw new Error("Não foi possível listar os cenários.");
     }
+
+    return dados.cenarios;
+}
+
+function separarVarianteK(nomeCenario) {
+    const casamento = nomeCenario.match(/^(.+)_k(\d+)$/);
+    return casamento ? { base: casamento[1], k: Number(casamento[2]) } : null;
+}
+
+function preencherSelectCenarios(cenarios) {
+
+    cenarioSelect.innerHTML = "";
+
+    cenarios.forEach(({ nome, totalNodes }) => {
+        const option = document.createElement("option");
+        option.value = nome;
+        option.textContent = `${nome} (${totalNodes} nós)`;
+        cenarioSelect.appendChild(option);
+    });
 }
 
 function corAlgoritmo(nome) {
@@ -71,201 +60,123 @@ function fmtNum(valor, casas) {
     return Number(valor).toFixed(casas);
 }
 
-async function inicializarMapa() {
+function criarMapa(elementoId) {
 
-    mapa = L.map("mapa").setView(
-        [-28.6786, -49.3696],
-        13
-    );
+    const mapa = L.map(elementoId).setView([-28.6786, -49.3696], 12);
 
     L.tileLayer(
         "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
-        {
-            attribution:
-                '&copy; OpenStreetMap contributors'
-        }
+        { attribution: "&copy; OpenStreetMap contributors" }
     ).addTo(mapa);
 
-    await carregarGrafoNoMapa();
+    return mapa;
 }
 
-async function carregarGrafoNoMapa() {
+async function buscarGrafo(cenario) {
 
-    try {
+    const resposta = await fetch(`${API_URL}/api/grafo?cenario=${encodeURIComponent(cenario)}`);
+    const dados = await resposta.json();
 
-        const resposta = await fetch(
-            `${API_URL}/api/grafo?cenario=${cenarioAtual()}`
+    if (!dados.sucesso) {
+        throw new Error("Não foi possível carregar o grafo.");
+    }
+
+    const nodesPorId = {};
+    const edgesPorPar = {};
+
+    dados.nodes.forEach(node => {
+        nodesPorId[node.id] = node;
+    });
+
+    dados.edges.forEach(edge => {
+        edgesPorPar[`${edge.source_id}-${edge.target_id}`] = edge;
+    });
+
+    return { nodes: dados.nodes, edges: dados.edges, nodesPorId, edgesPorPar };
+}
+
+function latlngNode(grafo, id) {
+    const node = grafo.nodesPorId[id];
+    return [Number(node.latitude), Number(node.longitude)];
+}
+
+function geometriaAresta(grafo, origemId, destinoId) {
+    const edge = grafo.edgesPorPar[`${origemId}-${destinoId}`];
+
+    return (edge && edge.geometria && edge.geometria.length > 1)
+        ? edge.geometria
+        : [latlngNode(grafo, origemId), latlngNode(grafo, destinoId)];
+}
+
+function desenharRede(mapa, grafo) {
+
+    const camada = L.layerGroup().addTo(mapa);
+
+    grafo.edges.forEach(edge => {
+        if (!grafo.nodesPorId[edge.source_id] || !grafo.nodesPorId[edge.target_id]) return;
+
+        L.polyline(geometriaAresta(grafo, edge.source_id, edge.target_id), {
+            weight: 2,
+            color: "#94a3b8",
+            opacity: 0.7
+        }).addTo(camada);
+    });
+
+    grafo.nodes.forEach(node => {
+        L.circleMarker([Number(node.latitude), Number(node.longitude)], {
+            radius: 5,
+            color: "#10242E",
+            weight: 1,
+            fillColor: "#ffffff",
+            fillOpacity: 1
+        })
+            .addTo(camada)
+            .bindPopup(`<strong>${node.name}</strong><br>Tipo: ${node.node_type}`);
+    });
+
+    if (grafo.nodes.length > 0) {
+        mapa.fitBounds(
+            grafo.nodes.map(n => [Number(n.latitude), Number(n.longitude)]),
+            { padding: [20, 20] }
         );
-
-        const dados = await resposta.json();
-
-        if (!dados.sucesso) {
-            throw new Error(
-                "Não foi possível carregar o grafo."
-            );
-        }
-
-        if (camadaGrafo) {
-            mapa.removeLayer(camadaGrafo);
-        }
-
-        camadaGrafo = L.layerGroup().addTo(mapa);
-
-        const nodes = dados.nodes;
-        const edges = dados.edges;
-
-        nodesPorIdAtual = {};
-        edgesPorParAtual = {};
-
-        const pontos = [];
-
-        nodes.forEach(node => {
-
-            nodesPorIdAtual[node.id] = node;
-
-            const latlng = [
-                Number(node.latitude),
-                Number(node.longitude)
-            ];
-
-            pontos.push(latlng);
-
-            const marcador = L.marker(latlng).addTo(camadaGrafo);
-
-            marcador.bindPopup(`
-                <strong>${node.name}</strong><br>
-                ID: ${node.id}<br>
-                Tipo: ${node.node_type}
-            `);
-
-        });
-
-        edges.forEach(edge => {
-
-            const origem = nodesPorIdAtual[edge.source_id];
-            const destino = nodesPorIdAtual[edge.target_id];
-
-            if (!origem || !destino) {
-                return;
-            }
-
-            edgesPorParAtual[`${edge.source_id}-${edge.target_id}`] = edge;
-
-            const pontosLinha = (edge.geometria && edge.geometria.length > 1)
-                ? edge.geometria
-                : [
-                    [Number(origem.latitude), Number(origem.longitude)],
-                    [Number(destino.latitude), Number(destino.longitude)]
-                ];
-
-            L.polyline(pontosLinha, {
-                weight: 2,
-                color: "#94a3b8"
-            }).addTo(camadaGrafo);
-
-        });
-
-        if (pontos.length > 0) {
-            mapa.fitBounds(pontos, { padding: [30, 30] });
-        }
-
-    } catch (erro) {
-
-        console.error(
-            "Erro ao carregar mapa:",
-            erro
-        );
-
     }
 
+    return camada;
 }
 
-function limparRotaDestacada() {
+function desenharRota(mapa, grafo, rotaIds) {
 
-    if (window.__linhaRotaDestaque) {
-        mapa.removeLayer(window.__linhaRotaDestaque);
-        window.__linhaRotaDestaque = null;
-    }
-
-    if (window.__marcadoresRotaDestaque) {
-        window.__marcadoresRotaDestaque.forEach(marcador => mapa.removeLayer(marcador));
-        window.__marcadoresRotaDestaque = null;
-    }
-}
-
-function destacarRotaNoMapa(rotaIds) {
-
-    if (!mapa || !rotaIds || rotaIds.length < 2) {
-        return;
-    }
-
+    const camada = L.layerGroup().addTo(mapa);
     const pontosRota = [];
 
     for (let i = 0; i < rotaIds.length - 1; i++) {
-        const origemId = rotaIds[i];
-        const destinoId = rotaIds[i + 1];
-
-        const edge = edgesPorParAtual[`${origemId}-${destinoId}`];
-
-        if (edge && edge.geometria && edge.geometria.length > 1) {
-            pontosRota.push(...edge.geometria);
-        } else {
-            const origem = nodesPorIdAtual[origemId];
-            const destino = nodesPorIdAtual[destinoId];
-
-            if (origem && destino) {
-                pontosRota.push(
-                    [Number(origem.latitude), Number(origem.longitude)],
-                    [Number(destino.latitude), Number(destino.longitude)]
-                );
-            }
-        }
+        pontosRota.push(...geometriaAresta(grafo, rotaIds[i], rotaIds[i + 1]));
     }
 
-    limparRotaDestacada();
+    L.polyline(pontosRota, { weight: 4, color: "#C23B2E" }).addTo(camada);
 
-    window.__linhaRotaDestaque = L.polyline(pontosRota, {
-        weight: 5,
-        color: "#dc2626"
-    }).addTo(mapa);
+    const posicoesPorNode = {};
 
-        window.__marcadoresRotaDestaque = (() => {
+    rotaIds.forEach((nodeId, indice) => {
+        if (!posicoesPorNode[nodeId]) posicoesPorNode[nodeId] = [];
+        posicoesPorNode[nodeId].push(indice + 1);
+    });
 
-        const posicoesPorNode = {};
+    Object.keys(posicoesPorNode).forEach(nodeIdStr => {
+        const nodeId = Number(nodeIdStr);
+        const rotulo = posicoesPorNode[nodeId].join("/");
 
-        rotaIds.forEach((nodeId, indice) => {
-            if (!posicoesPorNode[nodeId]) {
-                posicoesPorNode[nodeId] = [];
-            }
-            posicoesPorNode[nodeId].push(indice + 1);
+        const icone = L.divIcon({
+            className: "marcador-numerado",
+            html: `<span>${rotulo}</span>`,
+            iconSize: [32, 26],
+            iconAnchor: [16, 13]
         });
 
-        return Object.keys(posicoesPorNode).map(nodeIdStr => {
+        L.marker(latlngNode(grafo, nodeId), { icon: icone, zIndexOffset: 1000 })
+            .addTo(camada)
+            .bindPopup(`<strong>Parada ${rotulo}:</strong> ${grafo.nodesPorId[nodeId].name}`);
+    });
 
-            const nodeId = Number(nodeIdStr);
-            const node = nodesPorIdAtual[nodeId];
-
-            if (!node) {
-                return null;
-            }
-
-            const rotulo = posicoesPorNode[nodeId].join("/");
-
-            const icone = L.divIcon({
-                className: "marcador-numerado",
-                html: `<span>${rotulo}</span>`,
-                iconSize: [32, 26],
-                iconAnchor: [16, 13]
-            });
-
-            return L.marker(
-                [Number(node.latitude), Number(node.longitude)],
-                { icon: icone, zIndexOffset: 1000 }
-            )
-                .addTo(mapa)
-                .bindPopup(`<strong>Parada ${rotulo}:</strong> ${node.name}`);
-
-        }).filter(marcador => marcador !== null);
-
-    })();
+    return camada;
 }

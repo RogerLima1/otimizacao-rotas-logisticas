@@ -1,28 +1,10 @@
 const pool = require('../src/db/database');
+const { listarCenarios, buscarGrafo } = require('../src/db/grafo');
 const dijkstra = require('../src/algorithms/dijkstra');
 const bellmanFord = require('../src/algorithms/bellmanFord');
 const aStar = require('../src/algorithms/aStar');
 
 const TOLERANCIA_KM = 0.01;
-
-async function descobrirCenarios() {
-    const resultado = await pool.query(
-        `SELECT DISTINCT scenario FROM nodes ORDER BY scenario`
-    );
-    return resultado.rows.map(r => r.scenario);
-}
-
-async function buscarGrafo(cenario) {
-    const resultadoNodes = await pool.query(
-        `SELECT * FROM nodes WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
-    const resultadoEdges = await pool.query(
-        `SELECT * FROM edges WHERE scenario = $1 ORDER BY id`,
-        [cenario]
-    );
-    return { nodes: resultadoNodes.rows, edges: resultadoEdges.rows };
-}
 
 async function validarCenario(cenario) {
     const { nodes, edges } = await buscarGrafo(cenario);
@@ -102,7 +84,7 @@ async function main() {
     const cenarioArgumento = process.argv[2];
     const cenarios = cenarioArgumento
         ? [cenarioArgumento]
-        : await descobrirCenarios();
+        : await listarCenarios();
 
     if (cenarios.length === 0) {
         console.error('Nenhum cenário encontrado no banco.');
