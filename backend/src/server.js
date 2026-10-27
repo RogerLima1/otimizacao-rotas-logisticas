@@ -6,7 +6,12 @@ const { buscarGrafo } = require('./db/grafo');
 const dijkstra = require('./algorithms/dijkstra');
 const bellmanFord = require('./algorithms/bellmanFord');
 const aStar = require('./algorithms/aStar');
-const { construirMatrizDistancias, heuristicaVizinhoMaisProximo } = require('./algorithms/rotaEntrega');
+const {
+    TEMPO_PARADA_MIN,
+    MAX_NOS_ENTREGA,
+    encontrarOrigem,
+    calcularRotaEntrega
+} = require('./algorithms/rotaEntrega');
 const { rodarCenario } = require('../scripts/rodarExperimentosCompletos');
 
 const app = express();
@@ -19,9 +24,6 @@ const ALGORITMOS = [
     { nome: 'Bellman-Ford', caminho: 'bellman-ford', funcao: bellmanFord },
     { nome: 'A*', caminho: 'a-star', funcao: aStar }
 ];
-
-const TEMPO_PARADA_MIN = 20;
-const MAX_NOS_ENTREGA = 60;
 
 function obterCenario(req) {
     return (req.query.cenario || '').toString();
@@ -184,18 +186,14 @@ app.get('/api/rotas/entrega', async (req, res) => {
             });
         }
 
-        const nodeOrigem = nodes.find(n => n.node_type === 'origem') || nodes[0];
+        const nodeOrigem = encontrarOrigem(nodes);
         const nomePorId = id => nodes.find(n => n.id === id)?.name ?? `Node ${id}`;
 
         const resultados = {};
 
         for (const algoritmo of ALGORITMOS) {
-            const { matriz, tempoExecucaoTotalMs } =
-                construirMatrizDistancias(nodes, edges, algoritmo.funcao);
-
-            const rota = heuristicaVizinhoMaisProximo(
-                nodes, matriz, nodeOrigem.id, TEMPO_PARADA_MIN
-            );
+            const { rota, tempoExecucaoTotalMs } =
+                calcularRotaEntrega(nodes, edges, algoritmo.funcao);
 
             if (!rota.sucesso) {
                 resultados[algoritmo.nome] = {
@@ -238,7 +236,6 @@ app.get('/api/experimentos/rodar', async (req, res) => {
     try {
         const cenario = obterCenario(req);
         const repeticoes = Number(req.query.repeticoes) || 10;
-        const maxPares = Number(req.query.maxPares) || 10;
 
         if (repeticoes < 1 || repeticoes > 200) {
             return res.status(400).json({
@@ -247,14 +244,7 @@ app.get('/api/experimentos/rodar', async (req, res) => {
             });
         }
 
-        if (maxPares < 1 || maxPares > 2000) {
-            return res.status(400).json({
-                sucesso: false,
-                mensagem: 'O número máximo de pares deve estar entre 1 e 2000.'
-            });
-        }
-
-        const resultado = await rodarCenario(cenario, repeticoes, maxPares);
+        const resultado = await rodarCenario(cenario, repeticoes);
 
         if (!resultado.executado) {
             return res.status(400).json({
@@ -267,8 +257,7 @@ app.get('/api/experimentos/rodar', async (req, res) => {
             sucesso: true,
             mensagem: 'Experimentos executados com sucesso.',
             cenario,
-            repeticoes_por_par: repeticoes,
-            max_pares: maxPares,
+            repeticoes_por_algoritmo: repeticoes,
             ...resultado
         });
 
@@ -284,11 +273,13 @@ app.get('/api/experimentos/resumo', async (req, res) => {
         const resultado = await pool.query(`
             SELECT
                 scenario,
+                execution_round,
+                order_position,
                 algorithm,
                 COUNT(*) FILTER (WHERE reachable) AS execucoes_com_rota,
-                AVG(distance_km) FILTER (WHERE reachable) AS media_distancia_km,
-                AVG(cost_brl) FILTER (WHERE reachable) AS media_custo_brl,
-                AVG(travel_time_min) FILTER (WHERE reachable) AS media_tempo_min,
+                AVG(distance_km) FILTER (WHERE reachable) AS rota_distancia_km,
+                AVG(cost_brl) FILTER (WHERE reachable) AS rota_custo_brl,
+                AVG(travel_time_min) FILTER (WHERE reachable) AS rota_tempo_viagem_min,
                 AVG(execution_ms) AS media_execucao_ms,
                 STDDEV_POP(execution_ms) AS desvio_padrao_execucao_ms,
                 MIN(execution_ms) AS min_execucao_ms,
@@ -296,8 +287,8 @@ app.get('/api/experimentos/resumo', async (req, res) => {
                 PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY execution_ms) AS mediana_execucao_ms
             FROM experiments
             WHERE ($1::VARCHAR IS NULL OR scenario = $1)
-            GROUP BY scenario, algorithm
-            ORDER BY scenario, algorithm
+            GROUP BY scenario, execution_round, order_position, algorithm
+            ORDER BY scenario, execution_round, order_position
         `, [cenarioFiltro]);
 
         res.json({

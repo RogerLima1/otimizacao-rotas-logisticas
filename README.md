@@ -76,15 +76,32 @@ Geocodifica os endereços reais (Nominatim) e calcula a rota real pelas
 ruas entre pontos próximos (OSRM). Leva de 1 a 3 minutos por cenário.
 Rodar o mesmo nome de novo apaga e recria os dados daquele cenário.
 
+Para a página **Rota de Entrega Completa**, gere também as variantes
+com k = 3, 5 e 8 (k = vizinhos mais próximos ligados a cada ponto):
+
+```
+node scripts/gerarCenarioTintas.js tintas_pequeno 9 3,5,8
+node scripts/gerarCenarioTintas.js tintas_medio 14 3,5,8
+node scripts/gerarCenarioTintas.js tintas_grande 19 3,5,8
+```
+
+Cada comando cria `<nome>_k3`, `<nome>_k5` e `<nome>_k8` com exatamente
+os mesmos pontos. Ao calcular a rota de entrega de um cenário, a página
+roda os algoritmos nas três redes e mostra um mapa para cada k, com o
+caminho traçado e a comparação entre eles. Sem o terceiro argumento, o
+script usa k = 3 como antes.
+
 9. Rode a bateria de experimentos
 
 ```
 node scripts/rodarExperimentosCompletos.js
 ```
 
-Roda os 3 algoritmos em vários pares origem/destino, salva no banco e
-exporta CSVs em `backend/resultados/`. Parâmetros opcionais:
-`--repeticoes=N` (default 10) e `--maxPares=N` (default 60).
+Calcula a rota de entrega completa (origem → todos os pontos → origem)
+com cada um dos 3 algoritmos, em três rodadas (ordem fixa Dijkstra →
+Bellman-Ford → A* e duas ordens sorteadas), salva no banco e exporta CSVs
+em `backend/resultados/`. Parâmetro opcional: `--repeticoes=N` (default
+10), número de vezes que a rota é calculada por algoritmo em cada rodada.
 
 Rodar de novo para um cenário apaga as execuções antigas dele antes de
 gravar as novas.
@@ -106,5 +123,5 @@ pares (esperado, já que resolvem o mesmo problema).
 | `/api/rotas/dijkstra?cenario=X&origem=1&destino=8` | Calcula rota (troque `dijkstra` por `bellman-ford` ou `a-star`) |
 | `/api/rotas/entrega?cenario=X` | Rota completa: origem → todos os pontos → origem |
 | `/api/experimentos/resumo?cenario=X` | Estatísticas agregadas dos experimentos |
-| `/api/experimentos/rodar?cenario=X&repeticoes=5&maxPares=1000` | Roda os experimentos sob demanda e atualiza o resumo |
+| `/api/experimentos/rodar?cenario=X&repeticoes=30` | Roda os experimentos sob demanda e atualiza o resumo |
 

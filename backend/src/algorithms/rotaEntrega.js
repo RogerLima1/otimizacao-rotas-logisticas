@@ -97,4 +97,29 @@ function heuristicaVizinhoMaisProximo(nodes, matriz, origemId, tempoParadaMin) {
     };
 }
 
-module.exports = { construirMatrizDistancias, heuristicaVizinhoMaisProximo };
+const TEMPO_PARADA_MIN = 20;
+const MAX_NOS_ENTREGA = 60;
+
+function encontrarOrigem(nodes) {
+    return nodes.find(n => n.node_type === 'origem') || nodes[0];
+}
+
+function calcularRotaEntrega(nodes, edges, algoritmoFn) {
+    const { matriz, tempoExecucaoTotalMs } =
+        construirMatrizDistancias(nodes, edges, algoritmoFn);
+
+    const rota = heuristicaVizinhoMaisProximo(
+        nodes, matriz, encontrarOrigem(nodes).id, TEMPO_PARADA_MIN
+    );
+
+    return { rota, tempoExecucaoTotalMs };
+}
+
+module.exports = {
+    TEMPO_PARADA_MIN,
+    MAX_NOS_ENTREGA,
+    construirMatrizDistancias,
+    heuristicaVizinhoMaisProximo,
+    encontrarOrigem,
+    calcularRotaEntrega
+};

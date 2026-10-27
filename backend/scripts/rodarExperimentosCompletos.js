@@ -6,6 +6,11 @@ const { listarCenarios, buscarGrafo } = require('../src/db/grafo');
 const dijkstra = require('../src/algorithms/dijkstra');
 const bellmanFord = require('../src/algorithms/bellmanFord');
 const aStar = require('../src/algorithms/aStar');
+const {
+    MAX_NOS_ENTREGA,
+    encontrarOrigem,
+    calcularRotaEntrega
+} = require('../src/algorithms/rotaEntrega');
 
 const ALGORITMOS = [
     { nome: 'Dijkstra', funcao: dijkstra },
@@ -15,13 +20,11 @@ const ALGORITMOS = [
 
 function parseArgumentos() {
     const cenarios = [];
-    const flags = { repeticoes: 10, maxPares: 60 };
+    const flags = { repeticoes: 10 };
 
     process.argv.slice(2).forEach(arg => {
         if (arg.startsWith('--repeticoes=')) {
             flags.repeticoes = Number(arg.split('=')[1]);
-        } else if (arg.startsWith('--maxPares=')) {
-            flags.maxPares = Number(arg.split('=')[1]);
         } else {
             cenarios.push(arg);
         }
@@ -30,31 +33,40 @@ function parseArgumentos() {
     return { cenarios, flags };
 }
 
-function escolherPares(nodes, maxPares) {
-    const ids = nodes.map(n => n.id);
-    const todosPares = [];
-
-    for (const origem of ids) {
-        for (const destino of ids) {
-            if (origem !== destino) {
-                todosPares.push({ origem, destino });
-            }
-        }
-    }
-
-    if (todosPares.length <= maxPares) {
-        return todosPares;
-    }
-
-    const embaralhado = todosPares
-        .map(par => ({ par, chave: Math.random() }))
+function embaralhar(lista) {
+    return lista
+        .map(item => ({ item, chave: Math.random() }))
         .sort((a, b) => a.chave - b.chave)
-        .map(item => item.par);
-
-    return embaralhado.slice(0, maxPares);
+        .map(({ item }) => item);
 }
 
-async function rodarCenario(cenario, repeticoes, maxPares) {
+const RODADAS_ALEATORIAS = 2;
+
+function mesmaOrdem(a, b) {
+    return a.every((algoritmo, i) => algoritmo === b[i]);
+}
+
+function montarRodadas() {
+    const rodadas = [{ numero: 1, algoritmos: ALGORITMOS }];
+
+    for (let i = 0; i < RODADAS_ALEATORIAS; i++) {
+        let ordemAleatoria;
+
+        // Sorteia de novo se repetir a ordem de alguma rodada anterior.
+        do {
+            ordemAleatoria = embaralhar(ALGORITMOS);
+        } while (rodadas.some(r => mesmaOrdem(r.algoritmos, ordemAleatoria)));
+
+        rodadas.push({ numero: rodadas.length + 1, algoritmos: ordemAleatoria });
+    }
+
+    return rodadas;
+}
+
+// Cada execução é a rota de entrega completa: monta a matriz de caminhos
+// mínimos entre todos os pontos e aplica o vizinho mais próximo
+// (origem → todos os pontos → origem). O tempo medido cobre as duas etapas.
+async function rodarCenario(cenario, repeticoes) {
     console.log(`\n=== Cenário: ${cenario} ===`);
 
     const { nodes, edges } = await buscarGrafo(cenario);
@@ -67,6 +79,15 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
         };
     }
 
+    if (nodes.length > MAX_NOS_ENTREGA) {
+        console.log(`  Ignorado (mais de ${MAX_NOS_ENTREGA} nós).`);
+        return {
+            executado: false,
+            mensagem: `Cenário grande demais para a rota de entrega completa ` +
+                `(mais de ${MAX_NOS_ENTREGA} nós).`
+        };
+    }
+
     const apagados = await pool.query(
         `DELETE FROM experiments WHERE scenario = $1`,
         [cenario]
@@ -75,83 +96,80 @@ async function rodarCenario(cenario, repeticoes, maxPares) {
         console.log(`  ${apagados.rowCount} execuções antigas deste cenário foram apagadas.`);
     }
 
-    const pares = escolherPares(nodes, maxPares);
+    const rodadas = montarRodadas();
+    const origemId = encontrarOrigem(nodes).id;
 
     console.log(`  Nós: ${nodes.length} | Arestas: ${edges.length} | ` +
-        `Pares testados: ${pares.length} | Repetições por par: ${repeticoes}`);
+        `Repetições da rota por algoritmo: ${repeticoes}`);
 
     let inseridos = 0;
     let semRota = 0;
     let inconsistencias = 0;
 
-    for (const { origem, destino } of pares) {
+    for (const rodada of rodadas) {
 
-        let distanciaReferencia = null;
-        let parSemRota = false;
+        console.log(`  Rodada ${rodada.numero}: ` +
+            rodada.algoritmos.map(a => a.nome).join(' → '));
 
-        for (const algoritmo of ALGORITMOS) {
-            let ultimoResultado = null;
+        for (let i = 0; i < repeticoes; i++) {
 
-            for (let i = 0; i < repeticoes; i++) {
-                const resultado = algoritmo.funcao(nodes, edges, origem, destino);
+            let distanciaReferencia = null;
 
-                if (!resultado) {
-                    parSemRota = true;
+            for (const [indice, algoritmo] of rodada.algoritmos.entries()) {
+                const inicio = performance.now();
+                const { rota } = calcularRotaEntrega(nodes, edges, algoritmo.funcao);
+                const execucaoMs = performance.now() - inicio;
+
+                if (!rota.sucesso) {
+                    semRota++;
                     continue;
                 }
-
-                ultimoResultado = resultado;
 
                 await pool.query(`
                     INSERT INTO experiments (
                         scenario, algorithm, source_id, target_id,
                         distance_km, travel_time_min, cost_brl,
-                        execution_ms, path_nodes, reachable
+                        execution_ms, path_nodes, reachable,
+                        execution_round, order_position
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TRUE)
+                    VALUES ($1, $2, $3, $3, $4, $5, $6, $7, $8, TRUE, $9, $10)
                 `, [
-                    cenario, algoritmo.nome, origem, destino,
-                    resultado.distancia_km, resultado.tempo_min,
-                    resultado.custo_brl, resultado.tempo_execucao_ms,
-                    resultado.rota
+                    cenario, algoritmo.nome, origemId,
+                    rota.distanciaTotalKm, rota.tempoViagemTotalMin,
+                    rota.custoTotalBrl, execucaoMs,
+                    rota.rotaCompletaIds, rodada.numero, indice + 1
                 ]);
 
                 inseridos++;
-            }
 
-            if (ultimoResultado) {
                 if (distanciaReferencia === null) {
-                    distanciaReferencia = ultimoResultado.distancia_km;
-                } else if (
-                    Math.abs(ultimoResultado.distancia_km - distanciaReferencia) > 0.01
-                ) {
+                    distanciaReferencia = rota.distanciaTotalKm;
+                } else if (Math.abs(rota.distanciaTotalKm - distanciaReferencia) > 0.01) {
                     inconsistencias++;
                     console.warn(
-                        `  [ALERTA] Divergência de distância no par ` +
-                        `${origem}->${destino} (${algoritmo.nome}): ` +
-                        `${ultimoResultado.distancia_km} km vs referência ` +
-                        `${distanciaReferencia} km`
+                        `  [ALERTA] Divergência de distância da rota ` +
+                        `(${algoritmo.nome}): ${rota.distanciaTotalKm.toFixed(3)} km ` +
+                        `vs referência ${distanciaReferencia.toFixed(3)} km`
                     );
                 }
             }
         }
-
-        if (parSemRota) {
-            semRota++;
-        }
     }
 
     console.log(`  Execuções salvas: ${inseridos} | ` +
-        `Pares sem rota encontrada: ${semRota} | ` +
+        `Rotas que não fecharam: ${semRota} | ` +
         `Divergências entre algoritmos: ${inconsistencias}`);
 
     return {
         executado: true,
         execucoes_salvas: inseridos,
-        pares_testados: pares.length,
-        pares_sem_rota: semRota,
+        rotas_sem_sucesso: semRota,
         divergencias: inconsistencias,
-        execucoes_antigas_apagadas: apagados.rowCount
+        execucoes_antigas_apagadas: apagados.rowCount,
+        rodadas: rodadas.map(r => ({
+            numero: r.numero,
+            ordem: r.algoritmos.map(a => a.nome)
+        }))
     };
 }
 
@@ -173,16 +191,16 @@ async function exportarCsvs(cenarios) {
     }
 
     const detalhado = await pool.query(`
-        SELECT scenario, algorithm, source_id, target_id,
+        SELECT scenario, execution_round, order_position, algorithm,
                distance_km, travel_time_min, cost_brl,
                execution_ms, created_at
         FROM experiments
         WHERE scenario = ANY($1)
-        ORDER BY scenario, algorithm, source_id, target_id, created_at
+        ORDER BY scenario, execution_round, created_at, order_position
     `, [cenarios]);
 
     const csvDetalhado = paraCsv(detalhado.rows, [
-        'scenario', 'algorithm', 'source_id', 'target_id',
+        'scenario', 'execution_round', 'order_position', 'algorithm',
         'distance_km', 'travel_time_min', 'cost_brl', 'execution_ms', 'created_at'
     ]);
 
@@ -192,6 +210,8 @@ async function exportarCsvs(cenarios) {
     const resumo = await pool.query(`
         SELECT
             scenario,
+            execution_round,
+            order_position,
             algorithm,
             COUNT(*) AS execucoes,
             ROUND(AVG(distance_km)::numeric, 3) AS media_distancia_km,
@@ -206,12 +226,13 @@ async function exportarCsvs(cenarios) {
             ) AS mediana_execucao_ms
         FROM experiments
         WHERE scenario = ANY($1)
-        GROUP BY scenario, algorithm
-        ORDER BY scenario, algorithm
+        GROUP BY scenario, execution_round, order_position, algorithm
+        ORDER BY scenario, execution_round, order_position
     `, [cenarios]);
 
     const csvResumo = paraCsv(resumo.rows, [
-        'scenario', 'algorithm', 'execucoes', 'media_distancia_km',
+        'scenario', 'execution_round', 'order_position', 'algorithm',
+        'execucoes', 'media_distancia_km',
         'media_custo_brl', 'media_tempo_min', 'media_execucao_ms',
         'desvio_padrao_execucao_ms', 'min_execucao_ms', 'max_execucao_ms',
         'mediana_execucao_ms'
@@ -244,11 +265,10 @@ async function main() {
     }
 
     console.log(`Cenários a processar: ${cenarios.join(', ')}`);
-    console.log(`Repetições por par: ${flags.repeticoes} | ` +
-        `Máx. de pares por cenário: ${flags.maxPares}`);
+    console.log(`Repetições da rota por algoritmo: ${flags.repeticoes}`);
 
     for (const cenario of cenarios) {
-        await rodarCenario(cenario, flags.repeticoes, flags.maxPares);
+        await rodarCenario(cenario, flags.repeticoes);
     }
 
     await exportarCsvs(cenarios);

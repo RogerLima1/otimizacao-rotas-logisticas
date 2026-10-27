@@ -121,8 +121,13 @@
         <h2>Resumo Estatístico dos Experimentos</h2>
 
         <p class="legenda-secao">
-            Estatísticas de todas as execuções salvas: média, mediana,
-            desvio padrão, mínimo e máximo por rede (k) e algoritmo.
+            Cada rede (k = 3, 5 e 8) é testada em três rodadas: a 1ª na
+            ordem fixa Dijkstra → Bellman-Ford → A*, e a 2ª e a 3ª em
+            ordens sorteadas (diferentes entre si). Cada execução calcula a
+            rota de entrega inteira (matriz de caminhos entre todos os pontos
+            + vizinho mais próximo), a mesma traçada no mapa; os tempos em ms
+            são estatísticas (média, mediana, desvio padrão, mínimo e máximo)
+            dessas execuções.
         </p>
 
         <button id="btnAtualizarResumo">Atualizar Resumo</button>
@@ -135,11 +140,13 @@
                 <thead>
                     <tr>
                         <th>Rede</th>
+                        <th>Rodada</th>
+                        <th>Ordem</th>
                         <th>Algoritmo</th>
                         <th>Execuções</th>
-                        <th>Dist. média (km)</th>
-                        <th>Custo médio (R$)</th>
-                        <th>Tempo viagem médio (min)</th>
+                        <th>Dist. da rota (km)</th>
+                        <th>Custo da rota (R$)</th>
+                        <th>Tempo viagem da rota</th>
                         <th>Execução média (ms)</th>
                         <th>Mediana (ms)</th>
                         <th>Desvio padrão (ms)</th>
@@ -150,7 +157,7 @@
 
                 <tbody id="tabelaResumoExperimentos">
                     <tr>
-                        <td colspan="11">
+                        <td colspan="13">
                             Nenhum dado carregado ainda. Clique em
                             "Atualizar Resumo".
                         </td>

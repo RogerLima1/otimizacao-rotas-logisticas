@@ -234,6 +234,7 @@ td:first-child {
     font-family: var(--font-ui);
     font-weight: 600;
     text-align: left;
+    white-space: nowrap;
 }
 
 .tabela-scroll {
@@ -483,6 +484,10 @@ footer {
 
 .linha-melhor td {
     background: #FBEDEB;
+}
+
+.linha-inicio-rede td {
+    border-top: 2px solid var(--ink-soft);
 }
 
 .celula-vencedor {

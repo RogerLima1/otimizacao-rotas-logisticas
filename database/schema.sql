@@ -45,6 +45,8 @@ CREATE TABLE experiments (
   execution_ms DOUBLE PRECISION,
   path_nodes INTEGER[],
   reachable BOOLEAN NOT NULL DEFAULT TRUE,
+  execution_round SMALLINT NOT NULL DEFAULT 1,
+  order_position SMALLINT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 

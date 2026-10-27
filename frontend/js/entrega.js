@@ -360,7 +360,7 @@ async function carregarResumoExperimentos() {
     const variantes = variantesAtuais();
 
     if (variantes.length === 0) {
-        tabela.innerHTML = `<tr><td colspan="11">Nenhum cenário selecionado.</td></tr>`;
+        tabela.innerHTML = `<tr><td colspan="13">Nenhum cenário selecionado.</td></tr>`;
         return;
     }
 
@@ -384,7 +384,7 @@ async function carregarResumoExperimentos() {
         if (linhas.length === 0) {
             tabela.innerHTML = `
                 <tr>
-                    <td colspan="11">
+                    <td colspan="13">
                         Nenhum experimento salvo para as redes deste cenário.
                         Clique em "Atualizar Resumo" para rodar.
                     </td>
@@ -394,17 +394,27 @@ async function carregarResumoExperimentos() {
             return;
         }
 
-        linhas.forEach(linha => {
+        linhas.forEach((linha, indice) => {
 
             const tr = document.createElement("tr");
 
+            if (indice > 0 && linhas[indice - 1].k !== linha.k) {
+                tr.className = "linha-inicio-rede";
+            }
+
+            const rodada = linha.execution_round === 1
+                ? "1ª · ordem fixa"
+                : `${linha.execution_round}ª · aleatória`;
+
             tr.innerHTML = `
                 <td>k = ${linha.k}</td>
+                <td>${rodada}</td>
+                <td>${linha.order_position ? `${linha.order_position}º` : "—"}</td>
                 <td style="color: ${corAlgoritmo(linha.algorithm)}">${linha.algorithm}</td>
                 <td>${linha.execucoes_com_rota}</td>
-                <td>${fmtNum(linha.media_distancia_km, 2)}</td>
-                <td>R$ ${fmtNum(linha.media_custo_brl, 2)}</td>
-                <td>${fmtNum(linha.media_tempo_min, 2)}</td>
+                <td>${fmtNum(linha.rota_distancia_km, 2)}</td>
+                <td>R$ ${fmtNum(linha.rota_custo_brl, 2)}</td>
+                <td>${linha.rota_tempo_viagem_min === null ? "—" : formatarHoras(linha.rota_tempo_viagem_min)}</td>
                 <td>${fmtNum(linha.media_execucao_ms, 4)}</td>
                 <td>${fmtNum(linha.mediana_execucao_ms, 4)}</td>
                 <td>${fmtNum(linha.desvio_padrao_execucao_ms, 4)}</td>
@@ -416,7 +426,7 @@ async function carregarResumoExperimentos() {
         });
 
         mensagemResumo.textContent =
-            `Resumo atualizado (${linhas.length} combinações de rede/algoritmo).`;
+            `Resumo atualizado (${linhas.length} combinações de rede/rodada/algoritmo).`;
 
     } catch (erro) {
 
@@ -432,9 +442,9 @@ async function rodarERecarregarResumo() {
     if (variantes.length === 0) return;
 
     mensagemResumo.textContent =
-        "Rodando experimentos para todos os pares de cada rede (5 repetições " +
-        "cada)... isso pode levar alguns segundos, principalmente em " +
-        "cenários maiores.";
+        "Calculando a rota de entrega completa de cada rede (30 repetições " +
+        "por algoritmo, em três rodadas: ordem fixa e duas ordens aleatórias)... " +
+        "isso pode levar alguns segundos, principalmente em cenários maiores.";
 
     btnAtualizarResumo.disabled = true;
 
@@ -443,7 +453,7 @@ async function rodarERecarregarResumo() {
         for (const variante of variantes) {
 
             const resposta = await fetch(
-                `${API_URL}/api/experimentos/rodar?cenario=${encodeURIComponent(variante.cenario)}&repeticoes=5&maxPares=1000`
+                `${API_URL}/api/experimentos/rodar?cenario=${encodeURIComponent(variante.cenario)}&repeticoes=30`
             );
             const dados = await resposta.json();
 
